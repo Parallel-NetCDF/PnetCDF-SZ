@@ -1,15 +1,19 @@
 # This project is for developing SZ compression feature into PnetCDF library.
 
 ### Build utility program bin2nc. It converts a binary file to a NetCDF file
+```
 % make bin2nc
-
+```
 ### Convert a binary file in Little Endian form to a NetCDF file
+```
 % ./bin2nc testdouble_8_8_128.dat
-
+```
 ### Rename the file extension to ".nc"
+```
 % mv testdouble_8_8_128.dat.nc testdouble_8_8_128.nc
-
+```
 ### Check file header of the newly generated NetCDF file
+```
 % ncdump -h testdouble_8_8_128.nc
 netcdf testdouble_8_8_128 {
 dimensions:
@@ -27,10 +31,11 @@ variables:
 		:SZ\ URL = "https://collab.cels.anl.gov/display/ESR/SZ" ;
 		:Purpose = "This file is created to test integrated SZ compression and decompression in PnetCDF" ;
 }
-
+```
 ### Build utility program pnc_sz, a prototyped PnetCDF program with SZ compression and decompression feature.
+```
 % make pnc_sz
-
+```
 ### The usage of pnc_sz can be obtained from command "./pnc_sz -h"
 ```
 Usage: ./pnc_sz [-h] | [-z sz.conf] [-v var1[,...]] input_file
@@ -42,9 +47,11 @@ Usage: ./pnc_sz [-h] | [-z sz.conf] [-v var1[,...]] input_file
 ```
 
 ### Test run on 4 MPI processes to compress variables in input NetCDF file. Note scalar variables are not compressed.
+```
 % mpiexec -n 4 ./pnc_sz -z sz.config testdouble_8_8_128.nc
-
+```
 ### A new file with file name extension ".sz" was created.  Check file header of the new NetCDF file.
+```
 % ncdump -h testdouble_8_8_128.nc.sz
 netcdf testdouble_8_8_128.nc {
 dimensions:
@@ -68,11 +75,13 @@ variables:
 		:SZ\ URL = "https://collab.cels.anl.gov/display/ESR/SZ" ;
 		:Purpose = "This file is created to test integrated SZ compression and decompression in PnetCDF" ;
 }
-
+```
 ### Test run on 3 MPI processes to decompress variables in input NetCDF file.
+```
 % mpiexec -n 3 ./pnc_sz -d -z sz.config testdouble_8_8_128.nc.sz
-
+```
 ### A new file with file name extension ".unsz" was created.  Check file header of the new NetCDF file.
+```
 % ncdump -h testdouble_8_8_128.nc.sz.unsz
 netcdf testdouble_8_8_128.nc.sz {
 dimensions:
@@ -88,5 +97,5 @@ variables:
 		:SZ\ URL = "https://collab.cels.anl.gov/display/ESR/SZ" ;
 		:Purpose = "This file is created to test integrated SZ compression and decompression in PnetCDF" ;
 }
-
+```
 Contact: @wkliao
