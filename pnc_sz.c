@@ -213,7 +213,8 @@ var_decompress(MPI_Comm comm,
     signed char **outBuf = (signed char**) malloc(local_nblocks * sizeof(signed char*));
     for (k=0; k<local_nblocks; k++) {
         size_t r[5];
-        for (j=0; j<ndims; j++) r[j] = counts[(start_index+k)*ndims + j];
+
+        for (j=0; j<ndims; j++) r[j] = counts[(start_index+k+1)*ndims - j - 1];
         for (; j<5; j++) r[j] = 0;
         outBuf[k] = SZ_decompress(nc2SZtype(xtype), (unsigned char*)inBuf[k], block_lens[start_index+k], r[4], r[3], r[2], r[1], r[0]);
     }
@@ -221,7 +222,8 @@ var_decompress(MPI_Comm comm,
     /* write decompressed buffer to file out_ncid */
     for (k=0; k<local_nblocks; k++) {
         int index = (start_index + k) * ndims;
-        err = ncmpi_iput_vara_schar(out_ncid, out_varid, starts+index, counts+index, outBuf[k], NULL); ERR
+        for (count=1,j=0; j<ndims; j++) count *= counts[index+j];
+        err = ncmpi_iput_vara(out_ncid, out_varid, starts+index, counts+index, outBuf[k], count, nc2mpitype(xtype), NULL); ERR
     }
     err = ncmpi_wait_all(out_ncid, NC_REQ_ALL, NULL, NULL); ERR
 
@@ -296,11 +298,10 @@ var_compress(MPI_Comm comm,
 
     /* compress read buffer */
     size_t outSize=0, r[5];
-    for (j=0; j<ndims; j++) r[j] = count[j];
+    for (j=0; j<ndims; j++) r[j] = count[ndims-j-1];
     for (; j<5; j++) r[j] = 0;
     if (len > 0)
         outbuf = SZ_compress(nc2SZtype(xtype), buf, &outSize, r[4], r[3], r[2], r[1], r[0]);
-
 
     /* gather compressed sizes from all processes */
     int *block_lens, local_size=outSize;
