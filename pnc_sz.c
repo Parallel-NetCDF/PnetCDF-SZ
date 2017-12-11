@@ -411,9 +411,10 @@ usage(char *cmd)
     char *help =
 "Usage: %s [-h] | [-z sz.conf] [-v var1[,...]] input_file\n"
 "       [-h]            Print help\n"
+"       [-d]            Perform data decompression\n"
+"       [-z sz.conf]    Input SZ configure file\n"
 "       [-v var1[,...]] Output for variable(s) <var1>,... only\n"
 "                       Without this option, all variables are compressed\n"
-"       [-z sz.conf]    Input SZ configure file\n"
 "       input_file      Input netCDF file name\n"
 "*Parallel netCDF library version PNETCDF_RELEASE_VERSION of PNETCDF_RELEASE_DATE\n";
     fprintf(stderr, help, cmd);
