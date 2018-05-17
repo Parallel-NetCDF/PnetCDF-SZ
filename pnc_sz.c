@@ -114,7 +114,7 @@ var_decompress(MPI_Comm comm,
     /* obtain original number of dimensions */
     err = ncmpi_get_att(in_ncid, in_varid, "SZ.ndims", &ndims);
     if (err == NC_ENOTATT) {
-        printf("Error: missing original no. dimensions attribute for variable %s\n",var_name);
+        printf("Error: missing original number of dimensions attribute for variable %s\n",var_name);
         return err;
     } ERR
 
@@ -257,7 +257,7 @@ var_compress(MPI_Comm comm,
     if (ndims > 5) {
         char var_name[1024];
         err = ncmpi_inq_varname(in_ncid, in_varid, var_name); ERR
-        printf("Error: no. dimensions of variable %s exceeds SZ limit (5)\n",var_name);
+        printf("Error: number of dimensions of variable %s exceeds SZ limit (5)\n",var_name);
         printf("Error: skip variable %s\n", var_name);
         return err;
     }
@@ -356,9 +356,8 @@ var_compress(MPI_Comm comm,
     MPI_Allgather(start, ndims, MPI_OFFSET, starts, ndims, MPI_OFFSET, comm);
     MPI_Allgather(count, ndims, MPI_OFFSET, counts, ndims, MPI_OFFSET, comm);
 
-    /* save original subarray start[] for each block */
+    /* save original subarray start[] and count[] for each block */
     err = ncmpi_put_att_longlong(out_ncid, out_varid, "SZ.starts", NC_INT64, ndims*nprocs, starts); ERR
-    /* save original subarray count[] for each block */
     err = ncmpi_put_att_longlong(out_ncid, out_varid, "SZ.counts", NC_INT64, ndims*nprocs, counts); ERR
     err = ncmpi_enddef(out_ncid); ERR
 
@@ -410,9 +409,11 @@ static void
 usage(char *cmd)
 {
     char *help =
-"Usage: %s [-h] | [-z sz.conf] [-v var1[,...]] input_file\n"
+"Usage: %s [-h] | [-d] [-k] [-z sz.conf] [-v var1[,...]] input_file\n"
 "       [-h]            Print help\n"
 "       [-d]            Perform data decompression\n"
+"       [-k]            Decompressed output file format.\n"
+"                       1: classic, 2: 64-bit offset, 5: CDF-5 (default)\n"
 "       [-z sz.conf]    Input SZ configure file\n"
 "       [-v var1[,...]] Output for variable(s) <var1>,... only\n"
 "                       Without this option, all variables are compressed\n"
@@ -425,7 +426,7 @@ int main(int argc, char** argv)
 {
     extern int optind;
     int i, j, err=NC_NOERR, nerrs=0, opt, rank, nprocs, decompress=0;
-    int in_ncid, out_ncid, cmode, ngatts, ndims, nvars, varid;
+    int file_kind, in_ncid, out_ncid, cmode, ngatts, ndims, nvars, varid;
     int *in_varids=NULL;
     char outfile[1024], *cmd, cfgFile[1024], *infile;
     struct fspec *fspecp=NULL;
@@ -439,11 +440,14 @@ int main(int argc, char** argv)
     cmd = (char*) malloc(strlen(argv[0])+1);
     strcpy(cmd, argv[0]);
     cfgFile[0] = '\0';
+    file_kind = 5;  /* default decompressed file format is CDF-5 */
 
     /* get command-line arguments */
-    while ((opt = getopt(argc, argv, "dv:z:h")) != EOF) {
+    while ((opt = getopt(argc, argv, "dk:v:z:h")) != EOF) {
         switch(opt) {
             case 'd': decompress = 1;
+                      break;
+            case 'k': file_kind = atoi(optarg);
                       break;
             case 'v': make_lvars(optarg, fspecp);
                       break;
@@ -591,14 +595,21 @@ int main(int argc, char** argv)
         goto fn_exit;
     }
 
-    /* add extention to create file name for output file */
+    /* add extension to create file name for output file */
     if (decompress)
         sprintf(outfile, "%s.unsz", infile);
     else
         sprintf(outfile, "%s.sz", infile);
 
     /* create a new output file */
-    cmode = NC_CLOBBER | NC_64BIT_DATA;
+    cmode = NC_CLOBBER;
+    if (!decompress)
+        cmode |= NC_64BIT_DATA; /* compressed file must be CDF-5 */
+    else if (file_kind == 2)
+        cmode |= NC_64BIT_OFFSET;
+    else if (file_kind == 5)
+        cmode |= NC_64BIT_DATA;
+
     err = ncmpi_create(MPI_COMM_WORLD, outfile, cmode, info, &out_ncid); ERR
 
     /* copy the global attributes */

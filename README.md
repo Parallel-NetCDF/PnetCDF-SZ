@@ -32,14 +32,21 @@ variables:
 		:Purpose = "This file is created to test integrated SZ compression and decompression in PnetCDF" ;
 }
 ```
+#### check file format
+% ncdump -k testdouble_8_8_128.nc
+classic
+
 #### Build utility program pnc_sz, a prototyped PnetCDF program with SZ compression and decompression feature.
 ```
 % make pnc_sz
 ```
 #### The usage of pnc_sz can be obtained from command "./pnc_sz -h"
 ```
-Usage: ./pnc_sz [-h] | [-z sz.conf] [-v var1[,...]] input_file
+Usage: ./pnc_sz [-h] | [-d] [-k] [-z sz.conf] [-v var1[,...]] input_file
        [-h]            Print help
+       [-d]            Perform data decompression
+       [-k]            Decompressed output file format
+                       1: classic, 2: 64-bit offset, 5: CDF-5 (default)
        [-v var1[,...]] Output for variable(s) <var1>,... only
                        Without this option, all variables are compressed
        [-z sz.conf]    Input SZ configure file
@@ -76,13 +83,17 @@ variables:
 		:Purpose = "This file is created to test integrated SZ compression and decompression in PnetCDF" ;
 }
 ```
+#### check file format
+% ncdump -k testdouble_8_8_128.nc.sz
+cdf5
+
 #### Test run on 3 MPI processes to decompress variables in input NetCDF file.
 ```
 % mpiexec -n 3 ./pnc_sz -d -z sz.config testdouble_8_8_128.nc.sz
 ```
 #### A new file with file name extension ".unsz" was created.  Check file header of the new NetCDF file.
 ```
-% ncdump -h testdouble_8_8_128.nc.sz.unsz
+% ncdump -k testdouble_8_8_128.nc.sz.unsz
 netcdf testdouble_8_8_128.nc.sz {
 dimensions:
 	Z = 128 ;
@@ -98,4 +109,8 @@ variables:
 		:Purpose = "This file is created to test integrated SZ compression and decompression in PnetCDF" ;
 }
 ```
+#### check file format
+% ncdump -h testdouble_8_8_128.nc.sz.unsz
+cdf5
+
 Contact: @wkliao
