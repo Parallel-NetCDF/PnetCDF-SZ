@@ -34,6 +34,7 @@ variables:
 ```
 #### check file format
 % ncdump -k testdouble_8_8_128.nc
+
 classic
 
 #### Build utility program pnc_sz, a prototyped PnetCDF program with SZ compression and decompression feature.
@@ -85,6 +86,7 @@ variables:
 ```
 #### check file format
 % ncdump -k testdouble_8_8_128.nc.sz
+
 cdf5
 
 #### Test run on 3 MPI processes to decompress variables in input NetCDF file.
@@ -111,6 +113,7 @@ variables:
 ```
 #### check file format
 % ncdump -h testdouble_8_8_128.nc.sz.unsz
+
 cdf5
 
 Contact: @wkliao
