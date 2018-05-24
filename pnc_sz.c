@@ -15,6 +15,11 @@
 
 #define ERR {if(err!=NC_NOERR){printf("Error at line=%d: %s\n", __LINE__, ncmpi_strerror(err));goto fn_exit;}}
 
+#define INCLUDE_ONLY_SELECTED_CMPR_VARS 0
+#define INCLUDE_AND_CMPR_ALL_VARS 1
+#define INCLUDE_ALL_CMPR_ONLY_SELECTED_VARS 2
+
+
 static int
 nc2SZtype(nc_type xtype)
 {
@@ -79,13 +84,54 @@ struct fspec {
                     * option on command line */
 };
 
+static int checkSelectedVariables(int in_ncid, struct fspec* fspecp, char *infile, int decompress, int *in_varids)
+{
+	int i = 0, varid = 0, err;
+	for (i=0; i<fspecp->nlvars; i++) {
+		err = ncmpi_inq_varid(in_ncid, fspecp->lvars[i], &varid);
+		if (err == NC_ENOTVAR) {
+			printf("Error: variable %s not found in %s\n",
+				   fspecp->lvars[i], infile);
+			continue;
+		}
+		else ERR
+
+		if (decompress) { /* check if already compressed (SZ dimension) */
+			char dim_name[1204];
+			sprintf(dim_name, "SZ.%s",fspecp->lvars[i]);
+			err = ncmpi_inq_dimid(in_ncid, dim_name, NULL);
+			if (err == NC_EBADDIM) {
+				printf("Error: variable %s not compressed in %s\n",
+					   fspecp->lvars[i], infile);
+				continue;
+			}
+			else ERR
+		}
+		in_varids[i] = varid;
+	}
+	return i; //return the number of selected variables
+fn_exit:
+	return -1;
+}
+
+static int checkSelectedForCompression(int varid, int *in_cmprIds, int numOfSelected)
+{
+	int i = 0;
+	for(i=0;i<numOfSelected;i++)
+	{
+		if(varid==in_cmprIds[i])
+			return 1;
+	}
+	return 0;
+}
+
 static int 
 var_decompress(MPI_Comm comm,
                int      in_ncid,  /* ID of input file */
                int      in_varid, /* ID of input variable */
                int      out_ncid) /* ID of output file */
 {
-    int j, k, err, nprocs, rank;
+    int j, k, err, nprocs, rank, cmprTag = 0;
     int ndims, *dimids, dimid, out_varid, nblocks, *block_lens;
     nc_type xtype;
     MPI_Offset var_size, *starts, *counts;
@@ -110,7 +156,12 @@ var_decompress(MPI_Comm comm,
         printf("Error: missing original nc_type attribute for variable %s\n",var_name);
         return err;
     } ERR
-
+    /* obtain compression tag */
+    err = ncmpi_get_att(in_ncid, in_varid, "SZ.cmprTag", &cmprTag);
+    if (err == NC_ENOTATT) {
+        printf("Error: missing original cmprTag attribute for variable %s\n",var_name);
+        return err;
+    } ERR
     /* obtain original number of dimensions */
     err = ncmpi_get_att(in_ncid, in_varid, "SZ.ndims", &ndims);
     if (err == NC_ENOTATT) {
@@ -125,7 +176,8 @@ var_decompress(MPI_Comm comm,
         printf("Error: missing original dimension IDs attribute for variable %s\n",var_name);
         return err;
     } ERR
-
+    
+    printf("%s,", var_name);
     /* obtain number of compressed blocks */
     err = ncmpi_get_att(in_ncid, in_varid, "SZ.nblocks", &nblocks);
     if (err == NC_ENOTATT) {
@@ -216,7 +268,13 @@ var_decompress(MPI_Comm comm,
 
         for (j=0; j<ndims; j++) r[j] = counts[(start_index+k+1)*ndims - j - 1];
         for (; j<5; j++) r[j] = 0;
-        outBuf[k] = SZ_decompress(nc2SZtype(xtype), (unsigned char*)inBuf[k], block_lens[start_index+k], r[4], r[3], r[2], r[1], r[0]);
+        if(cmprTag)
+			outBuf[k] = SZ_decompress(nc2SZtype(xtype), (unsigned char*)inBuf[k], block_lens[start_index+k], r[4], r[3], r[2], r[1], r[0]);
+		else
+		{
+			outBuf[k] = (signed char*)malloc(block_lens[start_index+k]);
+			memcpy(outBuf[k], inBuf[k], block_lens[start_index+k]);
+		}
     }
 
     /* write decompressed buffer to file out_ncid */
@@ -241,7 +299,8 @@ static int
 var_compress(MPI_Comm comm,
              int      in_ncid,  /* ID of input file */
              int      in_varid, /* ID of input variable */
-             int      out_ncid) /* ID of output file */
+             int      out_ncid, /* ID of output file */
+             int	  cmprTag)  /* whether compressing the variable or not */
 {
     void *buf, *outbuf;
     int j, err, nprocs, rank, ndims, *dimids, dimid, out_varid, el_size;
@@ -301,8 +360,16 @@ var_compress(MPI_Comm comm,
     for (j=0; j<ndims; j++) r[j] = count[ndims-j-1];
     for (; j<5; j++) r[j] = 0;
     if (len > 0)
-        outbuf = SZ_compress(nc2SZtype(xtype), buf, &outSize, r[4], r[3], r[2], r[1], r[0]);
-
+    {
+        if(cmprTag)
+			outbuf = SZ_compress(nc2SZtype(xtype), buf, &outSize, r[4], r[3], r[2], r[1], r[0]);
+		else
+		{
+			outbuf = (unsigned char*)malloc(len*el_size);
+			memcpy(outbuf, buf, len*el_size);
+			outSize = len*el_size;
+		}
+	}
     /* gather compressed sizes from all processes */
     int *block_lens, local_size=outSize;
     block_lens = (int*) malloc(nprocs * sizeof(int));
@@ -323,6 +390,7 @@ var_compress(MPI_Comm comm,
     /* define a new dimension, also size of new variable */
     char var_name[256], dim_name[256];
     err = ncmpi_inq_varname(in_ncid, in_varid, var_name); ERR
+    printf("%s,",var_name);
     sprintf(dim_name, "SZ.%s", var_name);
     err = ncmpi_def_dim(out_ncid, dim_name, var_size, &dimid); ERR
 
@@ -340,6 +408,8 @@ var_compress(MPI_Comm comm,
 
     /* save original data type as special attributes in out_ncid */
     err = ncmpi_put_att_int(out_ncid, out_varid, "SZ.nc_type", NC_INT, 1, &xtype); ERR
+    /* save compression tag */
+    err = ncmpi_put_att_int(out_ncid, out_varid, "SZ.cmprTag", NC_INT, 1, &cmprTag); ERR        
     /* save original number of dimensions */
     err = ncmpi_put_att_int(out_ncid, out_varid, "SZ.ndims", NC_INT, 1, &ndims); ERR
     /* save original dimension IDs */
@@ -415,8 +485,8 @@ usage(char *cmd)
 "       [-k]            Decompressed output file format.\n"
 "                       1: classic, 2: 64-bit offset, 5: CDF-5 (default)\n"
 "       [-z sz.conf]    Input SZ configure file\n"
-"       [-v var1[,...]] Output for variable(s) <var1>,... only\n"
-"                       Without this option, all variables are compressed\n"
+"       [-v var1[,...]] Compress variable(s) <var1>,... only and remove non-selected variables\n"
+"       [-V var1[,...]] Compress variable(s) <var1>,... and store all variables (both compressed and non-compressed)\n" 
 "       input_file      Input netCDF file name\n"
 "*Parallel netCDF library version PNETCDF_RELEASE_VERSION of PNETCDF_RELEASE_DATE\n";
     fprintf(stderr, help, cmd);
@@ -425,9 +495,9 @@ usage(char *cmd)
 int main(int argc, char** argv)
 {
     extern int optind;
-    int i, j, err=NC_NOERR, nerrs=0, opt, rank, nprocs, decompress=0;
+    int i, j, err=NC_NOERR, nerrs=0, opt, rank, nprocs, decompress=0, nbCmprIds = 0;
     int file_kind, in_ncid, out_ncid, cmode, ngatts, ndims, nvars, varid;
-    int *in_varids=NULL;
+    int *in_varids=NULL, *in_cmprids=NULL, *in_cmprTags=NULL;
     char outfile[1024], *cmd, cfgFile[1024], *infile;
     struct fspec *fspecp=NULL;
     MPI_Info info=MPI_INFO_NULL;
@@ -442,15 +512,20 @@ int main(int argc, char** argv)
     cfgFile[0] = '\0';
     file_kind = 5;  /* default decompressed file format is CDF-5 */
 
+	int selectionMode = 0; 
     /* get command-line arguments */
-    while ((opt = getopt(argc, argv, "dk:v:z:h")) != EOF) {
+    while ((opt = getopt(argc, argv, "dk:v:V:z:h")) != EOF) {
         switch(opt) {
             case 'd': decompress = 1;
                       break;
             case 'k': file_kind = atoi(optarg);
                       break;
             case 'v': make_lvars(optarg, fspecp);
+					  selectionMode = INCLUDE_ONLY_SELECTED_CMPR_VARS;
                       break;
+            case 'V': make_lvars(optarg, fspecp);
+					  selectionMode = INCLUDE_ALL_CMPR_ONLY_SELECTED_VARS;
+					  break;
             case 'z': strcpy(cfgFile, optarg);
                       break;
             case 'h':
@@ -501,89 +576,95 @@ int main(int argc, char** argv)
     /* First check if all selected variables can be found in input file. */
     nvars = 0;
     if (fspecp->nlvars > 0) {
-        in_varids = (int*) malloc(fspecp->nlvars * sizeof(int));
-        for (i=0; i<fspecp->nlvars; i++) {
-            err = ncmpi_inq_varid(in_ncid, fspecp->lvars[i], &varid);
-            if (err == NC_ENOTVAR) {
-                printf("Error: variable %s not found in %s\n",
-                       fspecp->lvars[i], infile);
-                continue;
-            }
-            else ERR
-
-            if (decompress) { /* check if already compressed (SZ dimension) */
-                char dim_name[1204];
-                sprintf(dim_name, "SZ.%s",fspecp->lvars[i]);
-                err = ncmpi_inq_dimid(in_ncid, dim_name, NULL);
-                if (err == NC_EBADDIM) {
-                    printf("Error: variable %s not compressed in %s\n",
-                           fspecp->lvars[i], infile);
-                    continue;
-                }
-                else ERR
-            }
-            in_varids[nvars++] = varid;
-        }
+		if(selectionMode == INCLUDE_ONLY_SELECTED_CMPR_VARS) //-v
+		{
+			in_varids = (int*) malloc(fspecp->nlvars * sizeof(int));
+			nvars = checkSelectedVariables(in_ncid, fspecp, infile, decompress, in_varids);
+			if(nvars<0)
+			{
+				printf("Error: nvars = %d\n", nvars);
+				exit(0);
+			}
+		}
+		else if(selectionMode == INCLUDE_ALL_CMPR_ONLY_SELECTED_VARS) //-V: INCLUDE_ALL_CMPR_ONLY_SELECTED_VARS
+		{
+			err = ncmpi_inq_nvars(in_ncid, &nvars); ERR
+			if (nvars > 0) {
+				in_varids = (int*) malloc(nvars * sizeof(int));
+				for (i=0; i<nvars; i++) in_varids[i] = i;
+				in_cmprids = (int*)malloc(fspecp->nlvars * sizeof(int));
+				nbCmprIds = checkSelectedVariables(in_ncid, fspecp, infile, decompress, in_cmprids);
+				if(nbCmprIds<0)
+				{
+					printf("Error: nvars = %d\n", nvars);
+					exit(0);
+				}
+			}
+		}
     }
-    else { /* -v is not given, compress/decompress all variables */
+    else 
+    { /* neither -v nor -V is given, compress/decompress all variables */
         err = ncmpi_inq_nvars(in_ncid, &nvars); ERR
         if (nvars > 0) {
             in_varids = (int*) malloc(nvars * sizeof(int));
             for (i=0; i<nvars; i++) in_varids[i] = i;
         }
+        selectionMode = INCLUDE_AND_CMPR_ALL_VARS;
     }
 
-    if (decompress) { /* exclude variables that are not compressed */
-        for (j=0,i=0; i<nvars; i++) {
-            char var_name[1024], dim_name[1204];
-            if (j < i) in_varids[j] = in_varids[i];
-            err = ncmpi_inq_varname(in_ncid, in_varids[i], var_name); ERR
-            sprintf(dim_name, "SZ.%s", var_name);
-            err = ncmpi_inq_dimid(in_ncid, dim_name, NULL);
-            if (err == NC_EBADDIM) {
-                if (fspecp->nlvars > 0) /* variable explicitly requested */
-                    printf("Warn: variable %s not compressed in %s\n",
-                           var_name, infile);
-                /* skip variable in_varids[i] */
-                continue;
-            }
-            else if (err != NC_NOERR)
-                goto fn_exit;
-            j++;
-        }
-        nvars = j;
-    }
-    else { /* exclude variables that are already compressed */
-        for (j=0,i=0; i<nvars; i++) {
-            int ndims, dimid, SZ_dimid;
-            char var_name[1024], dim_name[1204];
-            if (j < i) in_varids[j] = in_varids[i];
+	if (decompress) { /* exclude variables that are not compressed */
+		for (j=0,i=0; i<nvars; i++) {
+			char var_name[1024], dim_name[1204];
+			if (j < i) in_varids[j] = in_varids[i];
+			err = ncmpi_inq_varname(in_ncid, in_varids[i], var_name); ERR
+			sprintf(dim_name, "SZ.%s", var_name);
+			err = ncmpi_inq_dimid(in_ncid, dim_name, NULL);
+			if (err == NC_EBADDIM) {
+				if (fspecp->nlvars > 0) /* variable explicitly requested */
+					printf("Warn: variable %s not compressed in %s\n",
+						   var_name, infile);
+				/* skip variable in_varids[i] */
+				continue;
+			}
+			else if (err != NC_NOERR)
+				goto fn_exit;
+			j++;
+		}
+		nvars = j;
+	}
+	else 
+	{ /* exclude variables that are already compressed */
+		for (j=0,i=0; i<nvars; i++) {
+			int ndims, dimid, SZ_dimid;
+			char var_name[1024], dim_name[1204];
+			if (j < i) in_varids[j] = in_varids[i];
 
-            /* already compressed variables are 1D */
-            err = ncmpi_inq_varndims(in_ncid, in_varids[i], &ndims); ERR
-            if (ndims > 1) {j++; continue;}
+			/* already compressed variables are 1D */
+			err = ncmpi_inq_varndims(in_ncid, in_varids[i], &ndims); ERR
+			if (ndims > 1) {j++; continue;}
 
-            /* skip scalar variables */
-            if (ndims == 0) continue;
+			/* skip scalar variables */
+			if (ndims == 0) continue;
 
-            /* check variable dimension name against prefix "SZ." */
-            err = ncmpi_inq_varname(in_ncid, in_varids[i], var_name); ERR
-            sprintf(dim_name, "SZ.%s", var_name);
-            err = ncmpi_inq_vardimid(in_ncid, in_varids[i], &dimid); ERR
-            err = ncmpi_inq_dimid(in_ncid, dim_name, &SZ_dimid);
-            if (err != NC_EBADDIM && dimid == SZ_dimid) {
-                if (fspecp->nlvars > 0) /* variable explicitly requested */
-                    printf("Warn: variable %s not compressed in %s\n",
-                           var_name, infile);
-                /* skip variable in_varids[i] */
-                continue;
-            }
-            else if (err != NC_EBADDIM && err != NC_NOERR)
-                goto fn_exit;
-            j++;
-        }
-        nvars = j;
-    }
+			/* check variable dimension name against prefix "SZ." */
+			err = ncmpi_inq_varname(in_ncid, in_varids[i], var_name); ERR
+			sprintf(dim_name, "SZ.%s", var_name);
+			err = ncmpi_inq_vardimid(in_ncid, in_varids[i], &dimid); ERR
+			err = ncmpi_inq_dimid(in_ncid, dim_name, &SZ_dimid);
+			if (err != NC_EBADDIM && dimid == SZ_dimid) {
+				if (fspecp->nlvars > 0) /* variable explicitly requested */
+					printf("Warn: variable %s not compressed in %s\n",
+						   var_name, infile);
+				/* skip variable in_varids[i] */
+				continue;
+			}
+			else if (err != NC_EBADDIM && err != NC_NOERR)
+				goto fn_exit;
+			j++;
+		}
+		nvars = j;
+	}
+
     free(fspecp);
     if (nvars == 0) { /* no variables fit the request */
         if (decompress)
@@ -633,13 +714,32 @@ int main(int argc, char** argv)
     }
     err = ncmpi__enddef(out_ncid, 8192, 1, 1, 1); ERR
 
-    for (i=0; i<nvars; i++) { /* loop thru all variables */
-        if (decompress)
-            err = var_decompress(MPI_COMM_WORLD, in_ncid, in_varids[i], out_ncid);
-        else
-            err = var_compress(MPI_COMM_WORLD, in_ncid, in_varids[i], out_ncid);
-        ERR
-    }
+	if(selectionMode == INCLUDE_AND_CMPR_ALL_VARS || selectionMode == INCLUDE_AND_CMPR_ALL_VARS)
+	{
+		for (i=0; i<nvars; i++) { /* loop thru all variables */
+			if (decompress)
+				err = var_decompress(MPI_COMM_WORLD, in_ncid, in_varids[i], out_ncid);
+			else
+				err = var_compress(MPI_COMM_WORLD, in_ncid, in_varids[i], out_ncid, 1);
+			ERR
+		}		
+	}
+	else //selectionMode == INCLUDE_ALL_CMPR_ONLY_SELECTED_VARS
+	{
+		for (i=0; i<nvars; i++)
+		{
+			if (decompress)
+				err = var_decompress(MPI_COMM_WORLD, in_ncid, in_varids[i], out_ncid);
+			else
+			{
+				if(checkSelectedForCompression(in_varids[i], in_cmprids, nbCmprIds))
+					err = var_compress(MPI_COMM_WORLD, in_ncid, in_varids[i], out_ncid, 1);
+				else
+					err = var_compress(MPI_COMM_WORLD, in_ncid, in_varids[i], out_ncid, 0);
+			}
+			ERR
+		}
+	}
     free(in_varids);
 
     err = ncmpi_close(in_ncid); ERR
@@ -647,6 +747,7 @@ int main(int argc, char** argv)
 
     SZ_Finalize();
 
+    printf("\n");
 fn_exit:
     MPI_Finalize();
     return (err != NC_NOERR || nerrs > 0);
