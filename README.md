@@ -1,5 +1,8 @@
 ### This project is for developing SZ compression feature into PnetCDF library.
 
+* [SZ](https://github.com/disheng222/SZ) algorithm is an error-bounded lossy compressor developed by Di Sheng at the Argonne National Laboratiry.
+* [PnetCDF](https://parallel-netcdf.github.io) is a parallel I/O library providing high-performance data access to Unidata's [NetCDF](https://github.com/Unidata/netcdf-c) files,
+
 #### Build utility program bin2nc. It converts a binary file to a NetCDF file
 ```
 % make bin2nc
@@ -33,10 +36,10 @@ variables:
 }
 ```
 #### check file format
+```
 % ncdump -k testdouble_8_8_128.nc
-
 classic
-
+```
 #### Build utility program pnc_sz, a prototyped PnetCDF program with SZ compression and decompression feature.
 ```
 % make pnc_sz
@@ -85,10 +88,10 @@ variables:
 }
 ```
 #### check file format
+```
 % ncdump -k testdouble_8_8_128.nc.sz
-
 cdf5
-
+```
 #### Test run on 3 MPI processes to decompress variables in input NetCDF file.
 ```
 % mpiexec -n 3 ./pnc_sz -d -z sz.config testdouble_8_8_128.nc.sz
@@ -112,8 +115,8 @@ variables:
 }
 ```
 #### check file format
+```
 % ncdump -h testdouble_8_8_128.nc.sz.unsz
-
 cdf5
-
+```
 Contact: @wkliao
