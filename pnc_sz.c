@@ -714,7 +714,7 @@ int main(int argc, char** argv)
     }
     err = ncmpi__enddef(out_ncid, 8192, 1, 1, 1); ERR
 
-	if(selectionMode == INCLUDE_AND_CMPR_ALL_VARS || selectionMode == INCLUDE_AND_CMPR_ALL_VARS)
+	if(selectionMode == INCLUDE_ONLY_SELECTED_CMPR_VARS || selectionMode == INCLUDE_AND_CMPR_ALL_VARS)
 	{
 		for (i=0; i<nvars; i++) { /* loop thru all variables */
 			if (decompress)
