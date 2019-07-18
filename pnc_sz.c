@@ -176,15 +176,14 @@ var_decompress(MPI_Comm comm,
         printf("Error: missing original dimension IDs attribute for variable %s\n",var_name);
         return err;
     } ERR
-    
-    printf("%s,", var_name);
+    if(rank==0)
+		printf("%s,", var_name);
     /* obtain number of compressed blocks */
     err = ncmpi_get_att(in_ncid, in_varid, "SZ.nblocks", &nblocks);
     if (err == NC_ENOTATT) {
         printf("Error: missing no. compressed blocks attribute for variable %s\n",var_name);
         return err;
     } ERR
-
     /* obtain sizes of compressed blocks */
     block_lens = (int*) malloc(nblocks * sizeof(int));
     err = ncmpi_get_att(in_ncid, in_varid, "SZ.block_lens", block_lens);
@@ -192,7 +191,6 @@ var_decompress(MPI_Comm comm,
         printf("Error: missing compressed block sizes attribute for variable %s\n",var_name);
         return err;
     } ERR
-
     /* obtain original put starts of the compressed blocks */
     starts = (MPI_Offset*) malloc(2 * nblocks * ndims * sizeof(MPI_Offset));
     err = ncmpi_get_att(in_ncid, in_varid, "SZ.starts", starts);
@@ -200,7 +198,6 @@ var_decompress(MPI_Comm comm,
         printf("Error: missing compressed block starts attribute for variable %s\n",var_name);
         return err;
     } ERR
-
     /* obtain original put counts of the compressed blocks */
     counts = starts + nblocks * ndims;
     err = ncmpi_get_att(in_ncid, in_varid, "SZ.counts", counts);
@@ -208,12 +205,9 @@ var_decompress(MPI_Comm comm,
         printf("Error: missing compressed block counts attribute for variable %s\n",var_name);
         return err;
     } ERR
-
     err = ncmpi_redef(out_ncid); ERR
-
     /* define a new variable in decompressed form in out_ncid */
     err = ncmpi_def_var(out_ncid, var_name, xtype, ndims, dimids, &out_varid); ERR
-
     /* copy variable's attributes, exclude SZ attributes */
     int natts;
     err = ncmpi_inq_varnatts(in_ncid, in_varid, &natts); ERR
@@ -223,74 +217,103 @@ var_decompress(MPI_Comm comm,
         if (!strncmp("SZ.", att_name, 3)) continue;
         err = ncmpi_copy_att(in_ncid, in_varid, att_name, out_ncid, out_varid); ERR
     }
-
     /* done with updating metadata for out_ncid, exit define mode */
     err = ncmpi_enddef(out_ncid); ERR
-
     /* prepare to read variable from in_ncid. First, calculate the read amount
      * and starting indices for each process */
-    int local_nblocks = nblocks / nprocs;
-    int local_blockID = local_nblocks * rank;
-    if (rank < nblocks % nprocs) {
-        local_blockID += rank;
-        local_nblocks++;
-    }
-    else {
-        local_blockID += nblocks % nprocs;
-    }
-
-    /* allocate read buffer */
-    signed char **inBuf = (signed char**) malloc(local_nblocks * sizeof(signed char*));
-
-    /* calculate subarray start indices and counts */
-    MPI_Offset start, count;
-    start = 0;
-    for (j=0; j<nblocks; j++) {
-        if (j == local_blockID) break;
-        start += block_lens[j];
-    }
-
-    /* read variable using nonblocking APIs, because number of subarrays to
-     * read may be different among processes */
-    int start_index = j;
-    for (k=0; k<local_nblocks; k++) {
-        count = block_lens[j];
-        inBuf[k] = (signed char*) malloc(count);
-        err = ncmpi_iget_vara_schar(in_ncid, in_varid, &start, &count, inBuf[k], NULL); ERR
-        start += block_lens[j++];
-    }
-    err = ncmpi_wait_all(in_ncid, NC_REQ_ALL, NULL, NULL); ERR
-
-    /* decompress read buffer */
-    signed char **outBuf = (signed char**) malloc(local_nblocks * sizeof(signed char*));
-    for (k=0; k<local_nblocks; k++) {
-        size_t r[5];
-
-        for (j=0; j<ndims; j++) r[j] = counts[(start_index+k+1)*ndims - j - 1];
-        for (; j<5; j++) r[j] = 0;
-        if(cmprTag)
-			outBuf[k] = SZ_decompress(nc2SZtype(xtype), (unsigned char*)inBuf[k], block_lens[start_index+k], r[4], r[3], r[2], r[1], r[0]);
-		else
-		{
-			outBuf[k] = (signed char*)malloc(block_lens[start_index+k]);
-			memcpy(outBuf[k], inBuf[k], block_lens[start_index+k]);
+    
+    int local_nblocks, local_blockID;
+    if(nblocks > nprocs)
+    {
+		local_nblocks = nblocks / nprocs;
+		local_blockID = local_nblocks * rank;
+		if (rank < nblocks % nprocs) {
+			local_blockID += rank;
+			local_nblocks++;
 		}
-    }
+		else {
+			local_blockID += nblocks % nprocs;
+		}
+	}
+	else
+	{
+		local_nblocks = 1;
+		local_blockID = (local_nblocks * rank) % nblocks;
+	}
+	
+    /* allocate read buffer */
+   // printf("rank:%d nblocks=%d nprocs=%d\n", rank, nblocks, nprocs);
+    if(nblocks > nprocs || rank < nblocks)
+    {
+		signed char **inBuf = (signed char**) malloc(local_nblocks * sizeof(signed char*));
 
-    /* write decompressed buffer to file out_ncid */
-    for (k=0; k<local_nblocks; k++) {
-        int index = (start_index + k) * ndims;
-        for (count=1,j=0; j<ndims; j++) count *= counts[index+j];
-        err = ncmpi_iput_vara(out_ncid, out_varid, starts+index, counts+index, outBuf[k], count, nc2mpitype(xtype), NULL); ERR
-    }
-    err = ncmpi_wait_all(out_ncid, NC_REQ_ALL, NULL, NULL); ERR
+		/* calculate subarray start indices and counts */
+		MPI_Offset start, count;
+		start = 0;
+		for (j=0; j<nblocks; j++) {
+			if (j == local_blockID) break;
+			start += block_lens[j];
+		}
+		/* read variable using nonblocking APIs, because number of subarrays to
+		 * read may be different among processes */
+		int start_index = j;
+		for (k=0; k<local_nblocks; k++) {
+			count = block_lens[j];
+			inBuf[k] = (signed char*) malloc(count);
+			err = ncmpi_iget_vara_schar(in_ncid, in_varid, &start, &count, inBuf[k], NULL); ERR
+			start += block_lens[j++];
+		}
+		if(nprocs>1)
+			{err = ncmpi_wait_all(in_ncid, NC_REQ_ALL, NULL, NULL); ERR}
+		/* decompress read buffer */
+		signed char **outBuf = (signed char**) malloc(local_nblocks * sizeof(signed char*));
+		for (k=0; k<local_nblocks; k++) {
+			size_t r[5];
 
-    free(block_lens);
-    free(dimids);
-    free(starts);
-    for (k=0; k<local_nblocks; k++) free(inBuf[k]);
-    free(inBuf);
-    free(outBuf);
+			for (j=0; j<ndims; j++) r[j] = counts[(start_index+k+1)*ndims - j - 1];
+			for (; j<5; j++) r[j] = 0;
+			for (j=ndims-1;j>=0;j--) //adjust the dimension length for compression
+			{
+				if(r[j]==1)
+					r[j] = 0;
+				else //r[j] must be greater than 1
+					break;
+			}	        
+			if(cmprTag)
+				outBuf[k] = SZ_decompress(nc2SZtype(xtype), (unsigned char*)inBuf[k], block_lens[start_index+k], r[4], r[3], r[2], r[1], r[0]);
+			else
+			{
+				outBuf[k] = (signed char*)malloc(block_lens[start_index+k]);
+				memcpy(outBuf[k], inBuf[k], block_lens[start_index+k]);
+			}
+		}
+
+		/* write decompressed buffer to file out_ncid */
+		for (k=0; k<local_nblocks; k++) {
+			int index = (start_index + k) * ndims;
+			for (count=1,j=0; j<ndims; j++) count *= counts[index+j];
+			err = ncmpi_iput_vara(out_ncid, out_varid, starts+index, counts+index, outBuf[k], count, nc2mpitype(xtype), NULL); ERR
+		}
+		if(nprocs>1)
+			{err = ncmpi_wait_all(out_ncid, NC_REQ_ALL, NULL, NULL); ERR}
+
+		for (k=0; k<local_nblocks; k++) free(inBuf[k]);
+		free(inBuf);
+		free(outBuf);		
+	}
+	else //TODO: skip the decompression when rank >= nprocs and also skip data writing
+	{
+		if(nprocs>1)
+		{
+			err = ncmpi_wait_all(in_ncid, NC_REQ_ALL, NULL, NULL); ERR
+			err = ncmpi_wait_all(out_ncid, NC_REQ_ALL, NULL, NULL); ERR
+		}					
+	}
+
+	free(block_lens);
+	free(dimids);
+	free(starts);
+
 fn_exit:
     return err;
 }
@@ -302,14 +325,16 @@ var_compress(MPI_Comm comm,
              int      out_ncid, /* ID of output file */
              int	  cmprTag)  /* whether compressing the variable or not */
 {
+    MPI_Offset offset=0, var_size=0;	
     void *buf, *outbuf;
     int j, err, nprocs, rank, ndims, *dimids, dimid, out_varid, el_size;
     nc_type xtype;
     MPI_Offset len, *dimlen, *start, *count;
+    size_t outSize=0;
 
     MPI_Comm_size(comm, &nprocs); /* number of MPI processes */
     MPI_Comm_rank(comm, &rank);   /* MPI process rank */
-
+	
     /* obtain variable size from in_ncid */
     err = ncmpi_inq_vartype(in_ncid, in_varid, &xtype); ERR
     err = ncmpi_inq_varndims(in_ncid, in_varid, &ndims); ERR
@@ -320,7 +345,6 @@ var_compress(MPI_Comm comm,
         printf("Error: skip variable %s\n", var_name);
         return err;
     }
-
     /* obtain variable dimension IDs and lengths */
     dimids = (int*) malloc(ndims * sizeof(int));
     dimlen = (MPI_Offset*) malloc(ndims * sizeof(MPI_Offset));
@@ -328,27 +352,89 @@ var_compress(MPI_Comm comm,
     err = xlen_nc_type(xtype, &el_size); ERR
     for (j=0; j<ndims; j++)
         err = ncmpi_inq_dimlen(in_ncid, dimids[j], &dimlen[j]); ERR
-
     /* partition the variable along the most significant dimension */
+
+	size_t totalSize = 1;
+	for(j=0;j<ndims;j++)
+		totalSize*=dimlen[j];
+
     start = (MPI_Offset*) malloc(2 * ndims * sizeof(MPI_Offset));
     count = start + ndims;
-    count[0] = dimlen[0] / nprocs;
-    start[0] = count[0] * rank;
-    if (rank < dimlen[0] % nprocs) {
-        start[0] += rank;
-        count[0]++;
-    }
-    else {
-        start[0] += dimlen[0] % nprocs;
-    }
-    len = count[0];
-    for (j=1; j<ndims; j++) {
-        start[j] = 0;
-        count[j] = dimlen[j];
-        len *= count[j];
-    }
-    free(dimlen);
+    for(j=0;j<ndims;j++)
+	{
+		start[j] = 0;
+		count[j] = dimlen[j];
+	}
 
+	size_t sigDimSize = 0;
+
+	int realNBlocks = 0;
+
+	if(nprocs <= totalSize)
+	{
+		//compute the real significant dimension, which might not be 0 because dimlen[0] could be set to 1
+		int s = 0;
+		if(ndims>1)
+		{
+			for(j=0;j<ndims;j++)
+			{
+				if(dimlen[j]<=1)
+					s++;
+				else
+					break;
+			}		
+		}
+		
+		sigDimSize = dimlen[s];
+		
+		if(sigDimSize >= nprocs)
+		{
+			realNBlocks = nprocs;
+			count[s] = sigDimSize / nprocs; //TODO: if dimlen[s] < nprocs, there would be problems....!
+			start[s] = count[s] * rank;
+			if (rank < sigDimSize % nprocs) {
+				start[s] += rank;
+				count[s]++;
+			}
+			else {
+				start[s] += sigDimSize % nprocs;
+			}
+			len = count[s];
+			for (j=s+1; j<ndims; j++) {
+				count[j] = dimlen[j];
+				len *= count[j];
+			}			
+		}
+		else//sigDimSize < nprocs,
+		{
+			realNBlocks = sigDimSize;
+			if(rank<=sigDimSize-1)
+			{
+				count[s] = 1;
+				start[s] = count[s] * rank;
+				len = count[s];
+				for (j=s+1; j<ndims; j++) {
+					count[j] = dimlen[j];
+					len *= count[j];
+				}							
+			}
+			else
+			{
+				for(j=0;j<ndims;j++)
+				{
+					start[j] = 0;
+					count[j] = 1;
+				}
+				len = 1;
+			}
+		}
+	}
+	else
+	{
+		len = totalSize;
+		realNBlocks = 1;
+	}
+    free(dimlen);
     /* allocate read buffer */
     buf = malloc(len*el_size); if (buf == NULL) err = NC_ENOMEM; ERR
 
@@ -356,13 +442,26 @@ var_compress(MPI_Comm comm,
     err = ncmpi_get_vara_all(in_ncid, in_varid, start, count, buf, len, nc2mpitype(xtype)); ERR
 
     /* compress read buffer */
-    size_t outSize=0, r[5];
-    for (j=0; j<ndims; j++) r[j] = count[ndims-j-1];
-    for (; j<5; j++) r[j] = 0;
+    	
     if (len > 0)
     {
         if(cmprTag)
-			outbuf = SZ_compress(nc2SZtype(xtype), buf, &outSize, r[4], r[3], r[2], r[1], r[0]);
+		{
+			size_t r[5];
+			for (j=0; j<ndims; j++) {r[j] = count[ndims-j-1];}
+			for (; j<5; j++) r[j] = 0;    
+			for (j=ndims-1;j>=0;j--) //adjust the dimension length for compression
+			{
+				if(r[j]==1)
+					r[j] = 0;
+				else //r[j] must be greater than 1
+					break;
+			}
+			if(r[0]!=0)			
+				outbuf = SZ_compress(nc2SZtype(xtype), buf, &outSize, r[4], r[3], r[2], r[1], r[0]);
+			else
+				outbuf = (unsigned char*)malloc(1); //just for avoiding memory-free issue later on.
+		}
 		else
 		{
 			outbuf = (unsigned char*)malloc(len*el_size);
@@ -377,7 +476,6 @@ var_compress(MPI_Comm comm,
 
     /* calculate the concatenated variable size and starting write offset
      * for this process */
-    MPI_Offset offset=0, var_size=0;
     for (j=0; j<nprocs; j++) var_size += block_lens[j];
     for (j=0; j<nprocs; j++) {
         if (j == rank) break;
@@ -390,7 +488,8 @@ var_compress(MPI_Comm comm,
     /* define a new dimension, also size of new variable */
     char var_name[256], dim_name[256];
     err = ncmpi_inq_varname(in_ncid, in_varid, var_name); ERR
-    printf("%s,",var_name);
+    if(rank==0)
+		printf("%s,",var_name);
     sprintf(dim_name, "SZ.%s", var_name);
     err = ncmpi_def_dim(out_ncid, dim_name, var_size, &dimid); ERR
 
@@ -415,9 +514,9 @@ var_compress(MPI_Comm comm,
     /* save original dimension IDs */
     err = ncmpi_put_att_int(out_ncid, out_varid, "SZ.dimids", NC_INT, ndims, dimids); ERR
     /* save number of compressed blocks */
-    err = ncmpi_put_att_int(out_ncid, out_varid, "SZ.nblocks", NC_INT, 1, &nprocs); ERR
+    err = ncmpi_put_att_int(out_ncid, out_varid, "SZ.nblocks", NC_INT, 1, &realNBlocks); ERR
     /* save sizes of compressed blocks */
-    err = ncmpi_put_att_int(out_ncid, out_varid, "SZ.block_lens", NC_INT, nprocs, block_lens); ERR
+    err = ncmpi_put_att_int(out_ncid, out_varid, "SZ.block_lens", NC_INT, realNBlocks, block_lens); ERR
 
     /* collect starts[] and counts[] from all processes */
     MPI_Offset *starts, *counts;
@@ -427,20 +526,58 @@ var_compress(MPI_Comm comm,
     MPI_Allgather(count, ndims, MPI_OFFSET, counts, ndims, MPI_OFFSET, comm);
 
     /* save original subarray start[] and count[] for each block */
-    err = ncmpi_put_att_longlong(out_ncid, out_varid, "SZ.starts", NC_INT64, ndims*nprocs, starts); ERR
-    err = ncmpi_put_att_longlong(out_ncid, out_varid, "SZ.counts", NC_INT64, ndims*nprocs, counts); ERR
+    err = ncmpi_put_att_longlong(out_ncid, out_varid, "SZ.starts", NC_INT64, ndims*realNBlocks, starts); ERR
+    err = ncmpi_put_att_longlong(out_ncid, out_varid, "SZ.counts", NC_INT64, ndims*realNBlocks, counts); ERR
     err = ncmpi_enddef(out_ncid); ERR
 
     /* write variable in parallel */
-    start[0] = offset;
-    count[0] = outSize;
-    err = ncmpi_put_vara_schar_all(out_ncid, out_varid, start, count, outbuf); ERR
-
+    if(nprocs > totalSize)
+    {
+		if(rank==0)
+		{
+			start[0] = 0;
+			count[0] = outSize;
+			err = ncmpi_begin_indep_data(out_ncid);
+			err = ncmpi_put_vara_schar(out_ncid, out_varid, start, count, outbuf); ERR
+			err = ncmpi_end_indep_data(out_ncid);
+		}
+		else
+		{
+			start[0] = 0;
+			count[0] = 0;
+		}
+	}
+	else
+	{
+		if(sigDimSize >= nprocs)
+		{
+			start[0] = offset;
+			count[0] = outSize;
+			err = ncmpi_put_vara_schar_all(out_ncid, out_varid, start, count, outbuf); ERR
+		}
+		else
+		{
+			if(rank<=sigDimSize-1)
+			{
+				start[0] = offset;
+				count[0] = outSize;
+				err = ncmpi_begin_indep_data(out_ncid);
+				err = ncmpi_put_vara_schar(out_ncid, out_varid, start, count, outbuf); ERR
+				err = ncmpi_end_indep_data(out_ncid);
+			}
+			else
+			{
+				start[0] = 0;
+				count[0] = 0;
+			}
+		}			
+	}
+	
     free(starts);
     free(block_lens);
     free(dimids);
     free(start);
-    free(outbuf);
+	free(outbuf);
     free(buf);
 
 fn_exit:
@@ -634,6 +771,7 @@ int main(int argc, char** argv)
 	}
 	else 
 	{ /* exclude variables that are already compressed */
+		
 		for (j=0,i=0; i<nvars; i++) {
 			int ndims, dimid, SZ_dimid;
 			char var_name[1024], dim_name[1204];
@@ -645,6 +783,7 @@ int main(int argc, char** argv)
 
 			/* skip scalar variables */
 			if (ndims == 0) continue;
+			//printf("----ndims=%d\n", ndims);
 
 			/* check variable dimension name against prefix "SZ." */
 			err = ncmpi_inq_varname(in_ncid, in_varids[i], var_name); ERR
@@ -732,7 +871,8 @@ int main(int argc, char** argv)
 				err = var_decompress(MPI_COMM_WORLD, in_ncid, in_varids[i], out_ncid);
 			else
 			{
-				if(checkSelectedForCompression(in_varids[i], in_cmprids, nbCmprIds))
+				int check = checkSelectedForCompression(in_varids[i], in_cmprids, nbCmprIds);
+				if(check)
 					err = var_compress(MPI_COMM_WORLD, in_ncid, in_varids[i], out_ncid, 1);
 				else
 					err = var_compress(MPI_COMM_WORLD, in_ncid, in_varids[i], out_ncid, 0);
