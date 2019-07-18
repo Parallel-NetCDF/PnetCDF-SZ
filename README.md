@@ -46,18 +46,20 @@ classic
 ```
 #### The usage of pnc_sz can be obtained from command "./pnc_sz -h"
 ```
-Usage: ./pnc_sz [-h] | [-d] [-k] [-z sz.conf] [-v var1[,...]] input_file
+Usage: pnc_sz [-h] | [-d] [-k] [-z sz.conf] [-v var1[,...]] input_file
        [-h]            Print help
        [-d]            Perform data decompression
-       [-k]            Decompressed output file format
+       [-k]            Decompressed output file format.
                        1: classic, 2: 64-bit offset, 5: CDF-5 (default)
-       [-v var1[,...]] Output for variable(s) <var1>,... only
-                       Without this option, all variables are compressed
        [-z sz.conf]    Input SZ configure file
+       [-v var1[,...]] Compress variable(s) <var1>,... only and remove non-selected variables
+       [-V var1[,...]] Compress variable(s) <var1>,... and store all variables (both compressed and non-compressed)
        input_file      Input netCDF file name
 ```
 
 #### Test run on 4 MPI processes to compress variables in input NetCDF file. Note scalar variables are not compressed.
+Befure testing, you are recommended to set the following environmental variable in .bashrc or so, otherwise, the decompression (mpirun -np 4 ./pnc_sz -d -z ....) might take a very long time.
+export PNETCDF_HINTS="nc_header_align_size=1048576"
 ```
 % mpiexec -n 4 ./pnc_sz -z sz.config testdouble_8_8_128.nc
 ```
