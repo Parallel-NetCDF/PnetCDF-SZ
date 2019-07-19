@@ -142,6 +142,8 @@ var_decompress(MPI_Comm comm,
     /* obtain original variable size */
     char var_name[1024], dim_name[1024];
     err = ncmpi_inq_varname(in_ncid, in_varid, var_name); ERR
+    if(rank==0)
+		printf("%s,", var_name);    
     sprintf(dim_name, "SZ.%s", var_name);
     err = ncmpi_inq_dimid(in_ncid, dim_name, &dimid); ERR
     if (err == NC_EBADDIM) {
@@ -176,8 +178,6 @@ var_decompress(MPI_Comm comm,
         printf("Error: missing original dimension IDs attribute for variable %s\n",var_name);
         return err;
     } ERR
-    if(rank==0)
-		printf("%s,", var_name);
     /* obtain number of compressed blocks */
     err = ncmpi_get_att(in_ncid, in_varid, "SZ.nblocks", &nblocks);
     if (err == NC_ENOTATT) {
@@ -263,8 +263,8 @@ var_decompress(MPI_Comm comm,
 			err = ncmpi_iget_vara_schar(in_ncid, in_varid, &start, &count, inBuf[k], NULL); ERR
 			start += block_lens[j++];
 		}
-		if(nprocs>1)
-			{err = ncmpi_wait_all(in_ncid, NC_REQ_ALL, NULL, NULL); ERR}
+		
+		err = ncmpi_wait_all(in_ncid, NC_REQ_ALL, NULL, NULL); ERR
 		/* decompress read buffer */
 		signed char **outBuf = (signed char**) malloc(local_nblocks * sizeof(signed char*));
 		for (k=0; k<local_nblocks; k++) {
@@ -280,7 +280,10 @@ var_decompress(MPI_Comm comm,
 					break;
 			}	        
 			if(cmprTag)
+			{
+				//printf("k=%d start_index=%d inSize=%zu inbuf=%d %d %d %d ....\n", k, start_index, block_lens[start_index+k], ((unsigned char*)inBuf[k])[0], ((unsigned char*)inBuf[k])[1], ((unsigned char*)inBuf[k])[2], ((unsigned char*)inBuf[k])[03]);
 				outBuf[k] = SZ_decompress(nc2SZtype(xtype), (unsigned char*)inBuf[k], block_lens[start_index+k], r[4], r[3], r[2], r[1], r[0]);
+			}
 			else
 			{
 				outBuf[k] = (signed char*)malloc(block_lens[start_index+k]);
@@ -294,8 +297,8 @@ var_decompress(MPI_Comm comm,
 			for (count=1,j=0; j<ndims; j++) count *= counts[index+j];
 			err = ncmpi_iput_vara(out_ncid, out_varid, starts+index, counts+index, outBuf[k], count, nc2mpitype(xtype), NULL); ERR
 		}
-		if(nprocs>1)
-			{err = ncmpi_wait_all(out_ncid, NC_REQ_ALL, NULL, NULL); ERR}
+		
+		err = ncmpi_wait_all(out_ncid, NC_REQ_ALL, NULL, NULL); ERR
 
 		for (k=0; k<local_nblocks; k++) free(inBuf[k]);
 		free(inBuf);
@@ -303,11 +306,8 @@ var_decompress(MPI_Comm comm,
 	}
 	else //TODO: skip the decompression when rank >= nprocs and also skip data writing
 	{
-		if(nprocs>1)
-		{
-			err = ncmpi_wait_all(in_ncid, NC_REQ_ALL, NULL, NULL); ERR
-			err = ncmpi_wait_all(out_ncid, NC_REQ_ALL, NULL, NULL); ERR
-		}					
+		err = ncmpi_wait_all(in_ncid, NC_REQ_ALL, NULL, NULL); ERR
+		err = ncmpi_wait_all(out_ncid, NC_REQ_ALL, NULL, NULL); ERR					
 	}
 
 	free(block_lens);
@@ -461,6 +461,7 @@ var_compress(MPI_Comm comm,
 				outbuf = SZ_compress(nc2SZtype(xtype), buf, &outSize, r[4], r[3], r[2], r[1], r[0]);
 			else
 				outbuf = (unsigned char*)malloc(1); //just for avoiding memory-free issue later on.
+			//printf("outSize=%zu outbuf=%d %d %d %d ....\n", outSize, ((unsigned char*)outbuf)[0], ((unsigned char*)outbuf)[1], ((unsigned char*)outbuf)[2], ((unsigned char*)outbuf)[3]);
 		}
 		else
 		{
@@ -472,8 +473,10 @@ var_compress(MPI_Comm comm,
     /* gather compressed sizes from all processes */
     int *block_lens, local_size=outSize;
     block_lens = (int*) malloc(nprocs * sizeof(int));
+    
     MPI_Allgather(&local_size, 1, MPI_INT, block_lens, 1, MPI_INT, comm);
 
+	//printf("block_lens[0]=%d local_size=%d realNBlocks=%d nprocs=%d\n", block_lens[0], local_size, realNBlocks, nprocs);
     /* calculate the concatenated variable size and starting write offset
      * for this process */
     for (j=0; j<nprocs; j++) var_size += block_lens[j];
@@ -553,6 +556,7 @@ var_compress(MPI_Comm comm,
 		{
 			start[0] = offset;
 			count[0] = outSize;
+			//printf("offset=%d outSize=%d, %d %d %d %d\n", offset, outSize, ((unsigned char*)outbuf)[0], ((unsigned char*)outbuf)[1], ((unsigned char*)outbuf)[2], ((unsigned char*)outbuf)[3]);
 			err = ncmpi_put_vara_schar_all(out_ncid, out_varid, start, count, outbuf); ERR
 		}
 		else
