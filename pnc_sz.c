@@ -300,7 +300,11 @@ var_decompress(MPI_Comm comm,
 		
 		err = ncmpi_wait_all(out_ncid, NC_REQ_ALL, NULL, NULL); ERR
 
-		for (k=0; k<local_nblocks; k++) free(inBuf[k]);
+		for (k=0; k<local_nblocks; k++) 
+		{
+			free(inBuf[k]);
+			free(outBuf[k]);
+		}
 		free(inBuf);
 		free(outBuf);		
 	}
