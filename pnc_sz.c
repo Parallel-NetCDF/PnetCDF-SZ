@@ -20,6 +20,8 @@
 #define INCLUDE_ALL_CMPR_ONLY_SELECTED_VARS 2
 
 
+int separateCR = 0;
+
 static int
 nc2SZtype(nc_type xtype)
 {
@@ -442,6 +444,8 @@ var_compress(MPI_Comm comm,
     /* allocate read buffer */
     buf = malloc(len*el_size); if (buf == NULL) err = NC_ENOMEM; ERR
 
+    int dataT = nc2SZtype(xtype);
+
     /* read the entire variable in parallel */
     err = ncmpi_get_vara_all(in_ncid, in_varid, start, count, buf, len, nc2mpitype(xtype)); ERR
 
@@ -462,7 +466,7 @@ var_compress(MPI_Comm comm,
 					break;
 			}
 			if(r[0]!=0)			
-				outbuf = SZ_compress(nc2SZtype(xtype), buf, &outSize, r[4], r[3], r[2], r[1], r[0]);
+				outbuf = SZ_compress(dataT, buf, &outSize, r[4], r[3], r[2], r[1], r[0]);
 			else
 				outbuf = (unsigned char*)malloc(1); //just for avoiding memory-free issue later on.
 			//printf("outSize=%zu outbuf=%d %d %d %d ....\n", outSize, ((unsigned char*)outbuf)[0], ((unsigned char*)outbuf)[1], ((unsigned char*)outbuf)[2], ((unsigned char*)outbuf)[3]);
@@ -554,8 +558,8 @@ var_compress(MPI_Comm comm,
 			count[0] = 0;
 		}
 	}
-	else
-	{
+     else
+     {
 		if(sigDimSize >= nprocs)
 		{
 			start[0] = offset;
@@ -579,13 +583,45 @@ var_compress(MPI_Comm comm,
 				count[0] = 0;
 			}
 		}			
+     }
+
+     //aggregate count[*] to get the total compressed data size
+     MPI_Offset totalCmprSize = 0;
+     MPI_Reduce(count, &totalCmprSize, 1, MPI_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+     if(rank==0)
+     {
+	if(separateCR) {
+	    int bytesPerPoint = 1;
+	    switch(dataT)
+	    {
+		case SZ_FLOAT:
+		case SZ_UINT32:
+		case SZ_INT32:
+			bytesPerPoint = 4;
+			break;
+		case SZ_DOUBLE:
+		case SZ_INT64:
+		case SZ_UINT64:
+			bytesPerPoint = 8;
+			break;
+		case SZ_UINT8:
+		case SZ_INT8:
+			bytesPerPoint = 1;
+			break;
+		case SZ_UINT16:
+		case SZ_INT16:
+			bytesPerPoint = 2;
+			break;
+	    }
+	    printf(" CR=%f, cmprSize=%zu, oriSize=%zu\n", 1.0*totalSize*bytesPerPoint/totalCmprSize, totalCmprSize, totalSize*bytesPerPoint);
 	}
-	
+     }
+
     free(starts);
     free(block_lens);
     free(dimids);
     free(start);
-	free(outbuf);
+    free(outbuf);
     free(buf);
 
 fn_exit:
@@ -627,6 +663,7 @@ usage(char *cmd)
 "Usage: %s [-h] | [-d] [-k] [-z sz.conf] [-v var1[,...]] input_file\n"
 "       [-h]            Print help\n"
 "       [-d]            Perform data decompression\n"
+"       [-s]            print the compression ratios for each field on the screen.\n"
 "       [-k]            Decompressed output file format.\n"
 "                       1: classic, 2: 64-bit offset, 5: CDF-5 (default)\n"
 "       [-z sz.conf]    Input SZ configure file\n"
@@ -659,18 +696,20 @@ int main(int argc, char** argv)
 
 	int selectionMode = 0; 
     /* get command-line arguments */
-    while ((opt = getopt(argc, argv, "dk:v:V:z:h")) != EOF) {
+    while ((opt = getopt(argc, argv, "dk:v:sV:z:h")) != EOF) {
         switch(opt) {
             case 'd': decompress = 1;
                       break;
             case 'k': file_kind = atoi(optarg);
                       break;
             case 'v': make_lvars(optarg, fspecp);
-					  selectionMode = INCLUDE_ONLY_SELECTED_CMPR_VARS;
+		      selectionMode = INCLUDE_ONLY_SELECTED_CMPR_VARS;
                       break;
-            case 'V': make_lvars(optarg, fspecp);
-					  selectionMode = INCLUDE_ALL_CMPR_ONLY_SELECTED_VARS;
-					  break;
+            case 's': separateCR = 1;
+		      break;
+	    case 'V': make_lvars(optarg, fspecp);
+		      selectionMode = INCLUDE_ALL_CMPR_ONLY_SELECTED_VARS;
+		      break;
             case 'z': strcpy(cfgFile, optarg);
                       break;
             case 'h':
