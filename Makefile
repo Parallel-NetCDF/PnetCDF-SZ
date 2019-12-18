@@ -5,7 +5,7 @@ all: bin2nc pnc_sz
 
 MPICC       = mpicc
 PNETCDF_DIR = /home/sdi/Install/parallel-netcdf-1.9.0-install
-SZ_DIR      = /home/sdi/Install/sz-2.1.5-install
+SZ_DIR      = /home/sdi/Install/sz-2.1.8-install
 
 DFLAGS      =
 OPTFLAGS    = -g -Wall
@@ -19,15 +19,9 @@ LIBS        = -lpnetcdf -lSZ -lz -lzstd -lzlib -lm
 bin2nc: bin2nc.c
 	$(MPICC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 
-bin2nc2: bin2nc2.c
-	$(MPICC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
-
-bin2nc_hacc: bin2nc_hacc.c
-	$(MPICC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
-
 pnc_sz: pnc_sz.c
 	$(MPICC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 
 clean:
 	rm -rf core* *.o
-	rm -rf bin2nc pnc_sz bin2nc2 bin2nc_hacc
+	rm -rf bin2nc pnc_sz

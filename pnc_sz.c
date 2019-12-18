@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include <sz.h>
 #include <mpi.h>
@@ -681,6 +682,7 @@ int main(int argc, char** argv)
     int file_kind, in_ncid, out_ncid, cmode, ngatts, ndims, nvars, varid;
     int *in_varids=NULL, *in_cmprids=NULL, *in_cmprTags=NULL;
     char outfile[1024], *cmd, cfgFile[1024], *infile;
+    extern char *optarg;  
     struct fspec *fspecp=NULL;
     MPI_Info info=MPI_INFO_NULL;
 
